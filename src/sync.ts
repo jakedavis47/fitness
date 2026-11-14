@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import type { DBCoreTransaction } from 'dexie'
 import { db, type Exercise, type Routine, type SyncCollection, type Workout, type WorkoutSet } from './db'
 import { installSyncOutbox } from './sync-outbox'
+import { removeSampleHistory } from './sample-history'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -134,12 +135,16 @@ export async function syncUserData(userId: string): Promise<void> {
   syncInProgress = (async () => {
     publishSyncStatus('syncing')
     try {
+      await removeSampleHistory()
       await uploadPending(userId)
       const initialRecords = await fetchAllCloudRecords(userId)
       const knownIds = new Set(initialRecords.map((row) => `${row.collection}:${row.record_id}`))
       await uploadLocalRecordsMissingFromCloud(userId, knownIds)
       const latestRecords = await fetchAllCloudRecords(userId)
       await applyCloudRecords(userId, latestRecords)
+      // Older devices may still upload samples. Delete downloaded samples using
+      // the local outbox so their tombstones also reach every other device.
+      if (await removeSampleHistory()) await uploadPending(userId)
       if (await db.syncQueue.where('userId').equals(userId).count()) scheduleSync()
       else publishSyncStatus('synced')
     } catch (error) {

@@ -42,12 +42,16 @@ async function setup(t) {
   }
   const window = new EventTarget()
   const module = { exports: {} }
+  const cleanup = { exports: {} }
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../src/sample-history.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
+    module: cleanup, exports: cleanup.exports, require: () => ({ db }),
+  })
   const source = fs.readFileSync(new URL('../src/sync.ts', import.meta.url), 'utf8').replaceAll('import.meta.env', '__env')
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
     module, exports: module.exports,
     require: name => ({
       '@supabase/supabase-js': { createClient: () => client },
-      './db': { db }, './sync-outbox': { installSyncOutbox },
+      './db': { db }, './sync-outbox': { installSyncOutbox }, './sample-history': cleanup.exports,
     })[name],
     __env: { VITE_SUPABASE_URL: 'https://test.supabase.co', VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test' },
     window, navigator, CustomEvent, console,
@@ -134,4 +138,46 @@ test('switching accounts cannot upload this browser history to another owner', a
   await assert.rejects(sync.setActiveSyncUser({ id: 'bob' }), /another account/)
   assert.equal((await db.syncQueue.toArray())[0].userId, 'alice')
   assert.equal((await db.exercises.get('exercise')).name, 'Private workout exercise')
+})
+
+test('cloud-only samples and their sets are removed locally and tombstoned remotely in the same sync', async t => {
+  const { db, remote, sync } = await setup(t)
+  const rows = [
+    ['workouts', { id: 'cloud-sample', isSample: true }],
+    ['sets', { id: 'sample-set', workoutId: 'cloud-sample' }],
+    ['workouts', { id: 'real', name: 'Real workout' }],
+    ['sets', { id: 'real-set', workoutId: 'real', weight: 100, reps: 8 }],
+  ]
+  for (const [collection, payload] of rows) {
+    remote.set(`${collection}:${payload.id}`, { collection, record_id: payload.id, payload, deleted: false, updated_at: '2026-01-01T00:00:00Z' })
+  }
+  await sync.setActiveSyncUser({ id: 'alice' })
+  assert.equal(await db.workouts.get('cloud-sample'), undefined)
+  assert.equal(await db.sets.get('sample-set'), undefined)
+  assert.equal(remote.get('workouts:cloud-sample').deleted, true)
+  assert.equal(remote.get('sets:sample-set').deleted, true)
+  assert.equal((await db.workouts.get('real')).name, 'Real workout')
+  assert.equal((await db.sets.get('real-set')).weight, 100)
+  assert.equal(remote.get('workouts:real').deleted, false)
+  assert.equal(await db.syncQueue.count(), 0)
+  await sync.syncUserData('alice')
+  assert.equal(await db.workouts.count(), 1)
+  assert.equal(await db.sets.count(), 1)
+})
+
+test('sample removal survives a failed cloud upload and retries without restoring samples', async t => {
+  const { db, remote, state, sync } = await setup(t)
+  await sync.setActiveSyncUser({ id: 'alice' })
+  await db.workouts.add({ id: 'local-sample', isSample: true })
+  await db.sets.add({ id: 'sample-set', workoutId: 'local-sample' })
+  state.failUpload = true
+  await assert.rejects(sync.syncUserData('alice'), /Network unavailable/)
+  assert.equal(await db.workouts.count(), 0)
+  assert.equal(await db.sets.count(), 0)
+  assert.ok(await db.syncQueue.count())
+  state.failUpload = false
+  await sync.syncUserData('alice')
+  assert.equal(remote.get('workouts:local-sample').deleted, true)
+  assert.equal(remote.get('sets:sample-set').deleted, true)
+  assert.equal(await db.syncQueue.count(), 0)
 })

@@ -1,3 +1,6 @@
+import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
+import { installSyncOutbox } from '../src/sync-outbox.ts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
@@ -50,52 +53,30 @@ test('skips routines that are unavailable rather than creating broken workout re
   assert.deepEqual(createSampleHistory([]), { workouts: [], sets: [] })
 })
 
-test('sample lifecycle avoids duplicates, preserves real data, and stays removed after initialization', async () => {
-  const realWorkout = { id: 'sample-history-v1-real-workout', name: 'Actual workout', finishedAt: '2026-11-08T12:00:00Z' }
+test('cleanup deletes only marked samples and their sets, queues tombstones, and is repeatable', async t => {
+  const db = new Dexie(`sample-cleanup-${crypto.randomUUID()}`)
+  db.version(1).stores({ workouts: 'id', sets: 'id, workoutId', syncQueue: 'id, userId, queuedAt' })
+  installSyncOutbox(db, () => 'alice', () => {})
+  t.after(() => db.delete())
+  const realWorkout = { id: 'sample-history-v1-real-workout', name: 'Actual workout' }
   const realSet = { id: 'real-set', workoutId: realWorkout.id, weight: 50, reps: 10 }
-  const workouts = new Map([[realWorkout.id, realWorkout]])
-  const sets = new Map([[realSet.id, realSet]])
-  const storage = new Map()
-  const db = {
-    routines: { toArray: async () => routines },
-    workouts: {
-      filter: predicate => ({
-        count: async () => [...workouts.values()].filter(predicate).length,
-        primaryKeys: async () => [...workouts.values()].filter(predicate).map(workout => workout.id),
-      }),
-      bulkAdd: async rows => rows.forEach(row => { assert.ok(!workouts.has(row.id)); workouts.set(row.id, row) }),
-      bulkDelete: async ids => ids.forEach(id => workouts.delete(id)),
-    },
-    sets: {
-      bulkAdd: async rows => rows.forEach(row => { assert.ok(!sets.has(row.id)); sets.set(row.id, row) }),
-      where: field => {
-        assert.equal(field, 'workoutId')
-        return { anyOf: ids => ({ delete: async () => {
-          for (const set of sets.values()) if (ids.includes(set.workoutId)) sets.delete(set.id)
-        } }) }
-      },
-    },
-    syncQueue: {},
-    transaction: async (_mode, ...args) => args.at(-1)(),
-  }
+  const sample = createSampleHistory(routines)
+  await db.workouts.bulkAdd([realWorkout, ...sample.workouts])
+  await db.sets.bulkAdd([realSet, ...sample.sets])
+  await db.syncQueue.clear()
   const module = { exports: {} }
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../src/sample-history.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS },
   }).outputText, {
-    module, exports: module.exports,
-    require: name => name === './db' ? { db } : { createSampleHistory },
-    localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+    module, exports: module.exports, require: () => ({ db }),
   })
-  const service = module.exports
-  await service.initializeSampleHistory()
-  assert.equal(workouts.size, 25)
-  assert.equal(await service.addSampleHistory(), 0)
-  assert.equal(workouts.size, 25)
-  await service.removeSampleHistory()
-  assert.deepEqual([...workouts.values()], [realWorkout])
-  assert.deepEqual([...sets.values()], [realSet])
-  await service.initializeSampleHistory()
-  assert.equal(workouts.size, 1)
-  assert.equal(await service.addSampleHistory(), 24)
-  assert.equal(workouts.get(realWorkout.id), realWorkout)
+  const { removeSampleHistory } = module.exports
+  assert.equal(await removeSampleHistory(), 24)
+  assert.deepEqual(await db.workouts.toArray(), [realWorkout])
+  assert.deepEqual(await db.sets.toArray(), [realSet])
+  const pending = await db.syncQueue.toArray()
+  assert.equal(pending.length, sample.workouts.length + sample.sets.length)
+  assert.ok(pending.every(change => change.action === 'delete' && change.userId === 'alice'))
+  assert.equal(await removeSampleHistory(), 0)
+  assert.equal(await db.syncQueue.count(), pending.length)
 })

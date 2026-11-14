@@ -58,6 +58,8 @@ Rebuild after changing either value. Prefer a separate Supabase test project for
 3. Open the Vercel URL on your phone and sign in with the same account. History and progress download automatically. Add the website to your Home Screen if you want to use it as an app.
 4. Log a test set on the phone and verify it appears on the computer after focusing the app or pressing Sync. Repeat with the phone offline, then reconnect and verify the set uploads.
 
-Browser storage belongs to its exact origin. The localhost and Vercel copies only share data after you sign in and sync them. Existing sample history remains marked with `isSample`; deployment does not add or remove any synthetic workouts.
+Browser storage belongs to its exact origin. The localhost and Vercel copies only share data after you sign in and sync them. On startup, the app removes workouts explicitly marked with `isSample` and their sets. Sync also removes downloaded samples and uploads deletion tombstones so older devices cannot restore them. Real workouts and their sets are preserved.
+
+The five program routines (Lift A1, A2, B, C1, and C2) and their exercise definitions are bundled with the app and installed for every new browser, including signed-out users. Each user can customize their own copies; routine edits and workout history remain private to their account. Startup preserves personal edits, custom routines, and deliberately deleted defaults.
 
 Use a separate account for a workout partner. A browser already linked to an account blocks switching to a different owner to avoid mixing workout histories.
