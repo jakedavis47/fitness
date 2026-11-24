@@ -54,7 +54,7 @@ export default function Today() {
               No routines yet. Create one in the Routines tab to start faster.
             </p>
           )}
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {routines.map((r) => (
               <button
                 key={r.id}
@@ -68,7 +68,6 @@ export default function Today() {
                   {' · '}{r.exercises.length} exercises
                   {r.exercises.some((exercise) => exercise.supersetGroup) ? ' · includes superset' : ''}
                 </div>
-                {r.notes && <div className="mt-1 line-clamp-2 text-left text-xs text-neutral-400">{r.notes}</div>}
               </button>
             ))}
           </div>

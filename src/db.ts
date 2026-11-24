@@ -138,6 +138,54 @@ builtInRoutines.push({
   })),
 })
 
+// Reuse the original program's exercise IDs so previous sets and progress carry
+// across programs. Equipment/grip options belong in notes, not duplicate lifts.
+const hypertrophyRoutines: Routine[] = [
+  {
+    id: 'built-in-hypertrophy-upper',
+    name: 'Hypertrophy 1 — Upper Body',
+    notes: '3-day hypertrophy program · Session 1 of 3 · Approximately 60–75 minutes. Incline DB press is the primary upper-body strength progression exercise. Use a controlled range of motion on rows. Use a seated leg curl. Progressively overload weighted machine crunches instead of adding endless repetitions.',
+    exercises: [
+      { exerciseId: 'incline-db-press', targetSets: 3, minReps: 6, maxReps: 10, restSeconds: 180 },
+      { exerciseId: 'chest-supported-row', targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'leg-press', targetSets: 2, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'leg-curl', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'cable-lateral-raise', targetSets: 3, minReps: 12, maxReps: 20, restSeconds: 120 },
+      { exerciseId: 'rope-pressdown', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'weighted-machine-crunch', targetSets: 3, minReps: 8, maxReps: 15, restSeconds: 120 },
+    ],
+  },
+  {
+    id: 'built-in-hypertrophy-lower',
+    name: 'Hypertrophy 2 — Lower Body',
+    notes: '3-day hypertrophy program · Session 2 of 3 · Approximately 60–75 minutes. Use weighted pull-ups instead of lat pulldowns; use a neutral grip if more comfortable. Prioritize controlled repetitions over maximal additional weight. Use a neutral grip on the machine press, a seated or lying leg curl, and cable or dumbbell curls. Hip thrusts provide glute development without requiring heavy spinal loading.',
+    exercises: [
+      { exerciseId: 'leg-press', targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'hip-thrust-glute-drive-machine', targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'wide-grip-pulldown-pull-up', targetSets: 3, minReps: 6, maxReps: 10, restSeconds: 180 },
+      { exerciseId: 'machine-chest-press', targetSets: 2, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'leg-curl', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'cable-curl', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'hanging-knee-captains-chair-raise', targetSets: 3, minReps: 8, maxReps: 15, restSeconds: 120 },
+    ],
+  },
+  {
+    id: 'built-in-hypertrophy-full-body',
+    name: 'Hypertrophy 3 — Full Body / Back',
+    notes: '3-day hypertrophy program · Session 3 of 3 · Approximately 60–75 minutes. Machine press is the selected chest-press option; flat neutral-grip dumbbell press is an alternative. Use rope triceps pushdowns for cable triceps extensions. Pallof press repetitions are per side.',
+    exercises: [
+      { exerciseId: 'machine-chest-press', targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'chest-supported-row', targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 180 },
+      { exerciseId: 'leg-extension', targetSets: 3, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'leg-curl', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'cable-lateral-raise', targetSets: 3, minReps: 12, maxReps: 20, restSeconds: 120 },
+      { exerciseId: 'rear-delt-fly', targetSets: 3, minReps: 12, maxReps: 20, restSeconds: 120 },
+      { exerciseId: 'rope-pressdown', targetSets: 2, minReps: 10, maxReps: 15, restSeconds: 120 },
+      { exerciseId: 'pallof-press', targetSets: 2, minReps: 10, maxReps: 15, perSide: true, restSeconds: 120 },
+    ],
+  },
+]
+
 const builtInExercises: Exercise[] = [
   { id: 'machine-chest-press', name: 'Machine press' },
   { id: 'leg-press', name: 'Leg press' },
@@ -308,16 +356,28 @@ db.version(10)
   })
 
 export async function ensureDefaultRoutines(): Promise<void> {
-  const seedKey = 'lift-log-default-routines-seeded-v1'
-  if (localStorage.getItem(seedKey)) return
+  const hypertrophyExerciseIds = new Set(hypertrophyRoutines.flatMap((routine) => routine.exercises.map((exercise) => exercise.exerciseId)))
+  // Seed each program once. A new program must reach existing browsers without
+  // restoring older defaults that a user deliberately deleted or overwriting edits.
+  const programs = [
+    { seedKey: 'lift-log-default-routines-seeded-v1', routines: builtInRoutines, exercises: builtInExercises },
+    {
+      seedKey: 'lift-log-hypertrophy-routines-seeded-v1',
+      routines: hypertrophyRoutines,
+      exercises: builtInExercises.filter((exercise) => hypertrophyExerciseIds.has(exercise.id)),
+    },
+  ]
+  for (const { seedKey, routines, exercises } of programs) {
+    if (localStorage.getItem(seedKey)) continue
 
-  await db.transaction('rw', db.exercises, db.routines, async () => {
-    for (const exercise of builtInExercises) {
-      if (!(await db.exercises.get(exercise.id))) await db.exercises.add(exercise)
-    }
-    for (const routine of builtInRoutines) {
-      if (!(await db.routines.get(routine.id))) await db.routines.add(routine)
-    }
-  })
-  localStorage.setItem(seedKey, 'true')
+    await db.transaction('rw', db.exercises, db.routines, async () => {
+      for (const exercise of exercises) {
+        if (!(await db.exercises.get(exercise.id))) await db.exercises.add(exercise)
+      }
+      for (const routine of routines) {
+        if (!(await db.routines.get(routine.id))) await db.routines.add(routine)
+      }
+    })
+    localStorage.setItem(seedKey, 'true')
+  }
 }
